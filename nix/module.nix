@@ -90,6 +90,7 @@ in
         XDG_CACHE_HOME = "%S/imcui";
         HF_HOME = "%S/imcui/huggingface";
         TORCH_HOME = "%S/imcui/torch";
+        MPLCONFIGDIR = "%S/imcui/matplotlib";
       } // cfg.environment;
 
       serviceConfig = {
@@ -108,7 +109,11 @@ in
           "${cfg.package}/bin/imcui ${lib.escapeShellArgs args}";
 
         DynamicUser = true;
-        StateDirectory = "imcui";
+        # Multiple entries so systemd creates each nested dir under
+        # /var/lib/ with correct DynamicUser ownership. The CLI's
+        # `--example-data-root` is click.Path(exists=True) and rejects
+        # the path unless the datasets dir exists at startup.
+        StateDirectory = [ "imcui" "imcui/datasets" ];
         # imcui/hloc/__init__.py opens "log.txt" relative to cwd at
         # import time. Point cwd at the state dir so that write lands
         # inside the writable StateDirectory instead of read-only /.
