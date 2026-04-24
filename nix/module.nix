@@ -109,6 +109,10 @@ in
 
         DynamicUser = true;
         StateDirectory = "imcui";
+        # imcui/hloc/__init__.py opens "log.txt" relative to cwd at
+        # import time. Point cwd at the state dir so that write lands
+        # inside the writable StateDirectory instead of read-only /.
+        WorkingDirectory = "%S/imcui";
         Restart = "on-failure";
         RestartSec = 5;
 
