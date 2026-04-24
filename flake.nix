@@ -1,11 +1,13 @@
 {
   description = "image-matching-webui — Gradio app for image-matching algorithms";
 
-  # Fetch git submodules when this flake is built from its own source.
-  # imcui/third_party/* submodules ship matcher/extractor Python packages
-  # that imcui adds to sys.path at runtime; without this the nix build
-  # copies empty submodule dirs. Needs nix ≥ 2.27.
-  inputs.self.submodules = true;
+  # imcui/third_party/* submodules ship the matcher/extractor Python
+  # packages that imcui adds to sys.path at runtime. We don't use
+  # `inputs.self.submodules = true;` because that forces every consumer
+  # of this flake (including machines that don't build imcui) to fetch
+  # ~1.2 GB of submodule code on every lock / first eval. Instead we
+  # fetch each submodule lazily inside the build via `builtins.fetchGit`
+  # from nix/submodules.nix — regenerate with nix/gen-submodules.sh.
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -57,8 +59,31 @@
         lib = pkgs.lib;
         python = pkgs.python311;
 
+        # Lazy submodule fetching: self is a lightweight github tarball
+        # (no submodules), and we overlay each third_party tree onto it
+        # before handing to uv2nix. Consumers that don't build imcui
+        # never fetch this ~1.2 GB of research code.
+        submoduleSpecs = import ./nix/submodules.nix;
+        fetchedSubmodules = lib.mapAttrs
+          (_: spec: builtins.fetchGit {
+            inherit (spec) url rev;
+            submodules = true;
+            allRefs = true;
+          })
+          submoduleSpecs;
+        workspaceRoot = pkgs.runCommand "imcui-src-with-submodules" { } (''
+          cp -r ${./.} $out
+          chmod -R u+w $out
+        '' + lib.concatStringsSep "\n" (lib.mapAttrsToList
+          (name: spec: ''
+            rm -rf $out/${spec.path}
+            mkdir -p $out/${spec.path}
+            cp -r ${fetchedSubmodules.${name}}/. $out/${spec.path}/
+          '')
+          submoduleSpecs));
+
         workspace = uv2nix.lib.workspace.loadWorkspace {
-          workspaceRoot = ./.;
+          inherit workspaceRoot;
         };
 
         overlay = workspace.mkPyprojectOverlay {
