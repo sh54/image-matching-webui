@@ -428,6 +428,7 @@ class ImageMatchingApp:
             allowed_paths=[
                 str(Path(__file__).parents[0]),
                 str(Path(__file__).parents[1]),
+                str(self.example_data_root),
             ],
         )
 
