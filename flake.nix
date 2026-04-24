@@ -1,6 +1,12 @@
 {
   description = "image-matching-webui — Gradio app for image-matching algorithms";
 
+  # Fetch git submodules when this flake is built from its own source.
+  # imcui/third_party/* submodules ship matcher/extractor Python packages
+  # that imcui adds to sys.path at runtime; without this the nix build
+  # copies empty submodule dirs. Needs nix ≥ 2.27.
+  inputs.self.submodules = true;
+
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";

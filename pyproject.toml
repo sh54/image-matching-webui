@@ -82,7 +82,7 @@ dev = ["black", "flake8", "isort", "pytest"]
 [tool.setuptools]
 packages = { find = { include = ["imcui*"] } }
 include-package-data = true
-package-data = { imcui = ["config/*.yaml"] }
+package-data = { imcui = ["config/*.yaml", "third_party/**/*"] }
 
 
 # Platform-conditional torch source: use the pytorch-cu128 index on Linux
