@@ -219,5 +219,7 @@
           default = pureShell;
           impure = impureShell;
         };
-      });
+      }) // {
+      nixosModules.default = import ./nix/module.nix self;
+    };
 }
