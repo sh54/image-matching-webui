@@ -10,7 +10,7 @@ authors = [
     {name = "vincentqyw"},
 ]
 readme = "README.md"
-requires-python = ">=3.10,<3.13"
+requires-python = ">=3.11,<3.12"
 license = {file = "LICENSE"}
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -21,11 +21,62 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 urls = {Repository = "https://github.com/Vincentqyw/image-matching-webui"}
-dynamic = ["dependencies"]
+
+# Pinned to the set that resolved cleanly in nyanza's venv on 2026-04-24
+# (torch 2.11.0+cu130 on Python 3.11, RTX 4090). Keep in sync with
+# requirements.txt until that file is retired.
+dependencies = [
+    "torch==2.8.0",
+    "torchvision==0.23.0",
+    "torchmetrics==1.9.0",
+    "pytorch-lightning==2.6.1",
+    "numpy==1.26.4",
+    "scipy==1.17.1",
+    "scikit-image==0.26.0",
+    "scikit-learn==1.8.0",
+    "matplotlib==3.8.4",
+    "seaborn==0.13.2",
+    "pandas==3.0.2",
+    "plotly==6.7.0",
+    "pillow==12.2.0",
+    "imageio==2.37.3",
+    "shapely==2.1.2",
+    "h5py==3.16.0",
+    "tensorboardx==2.6.5",
+    "kornia==0.8.2",
+    "einops==0.8.2",
+    "roma==1.5.6",
+    "omegaconf==2.3.0",
+    "e2cnn==0.2.3",
+    "pycolmap==3.12.6",
+    "poselib==2.0.5",
+    "pytlsd==0.0.2",
+    # opencv-contrib-python is a strict superset of opencv-python; keeping
+    # both causes file-collision errors when pyproject-nix merges wheels
+    # into a single venv.
+    "opencv-contrib-python==4.11.0.86",
+    "onnxruntime==1.25.0",
+    "gradio==6.13.0",
+    "fastapi==0.136.1",
+    "uvicorn==0.46.0",
+    "pydantic==2.13.3",
+    "huggingface-hub==1.11.0",
+    "datasets==4.8.4",
+    "gdown==6.0.0",
+    "loguru==0.7.3",
+    "tqdm==4.67.3",
+    "protobuf==6.33.6",
+    "psutil==7.2.2",
+    "pyyaml==6.0.3",
+    "easydict==1.13",
+    "jinja2==3.1.6",
+    "yacs==0.1.8",
+    "ray[serve]==2.55.1",
+]
 
 
 [project.optional-dependencies]
-dev = ["black", "flake8", "isort"]
+dev = ["black", "flake8", "isort", "pytest"]
 
 
 [tool.setuptools]
@@ -34,8 +85,27 @@ include-package-data = true
 package-data = { imcui = ["config/*.yaml"] }
 
 
-[tool.setuptools.dynamic]
-dependencies = {file = ["requirements.txt"]}
+# Platform-conditional torch source: use the pytorch-cu128 index on Linux
+# (matches cudaPackages_12 in nixpkgs), pytorch-cpu on macOS.
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", marker = "platform_system == 'Darwin'" },
+    { index = "pytorch-cu128", marker = "platform_system == 'Linux' and platform_machine == 'x86_64'" },
+]
+torchvision = [
+    { index = "pytorch-cpu", marker = "platform_system == 'Darwin'" },
+    { index = "pytorch-cu128", marker = "platform_system == 'Linux' and platform_machine == 'x86_64'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [project.scripts]
 imcui = "imcui.cli.main:main"

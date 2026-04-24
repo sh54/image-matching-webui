@@ -4,13 +4,43 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+
     devshell = {
       url = "github:numtide/devshell";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    pyproject-nix = {
+      url = "github:pyproject-nix/pyproject.nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    uv2nix = {
+      url = "github:pyproject-nix/uv2nix";
+      inputs.pyproject-nix.follows = "pyproject-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    pyproject-build-systems = {
+      url = "github:pyproject-nix/build-system-pkgs";
+      inputs.pyproject-nix.follows = "pyproject-nix";
+      inputs.uv2nix.follows = "uv2nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    uv2nix_hammer_overrides = {
+      url = "github:TyberiusPrime/uv2nix_hammer_overrides";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, flake-utils, devshell }:
+  outputs =
+    { self
+    , nixpkgs
+    , flake-utils
+    , devshell
+    , pyproject-nix
+    , uv2nix
+    , pyproject-build-systems
+    , uv2nix_hammer_overrides
+    }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs {
@@ -18,25 +48,79 @@
           config.allowUnfree = true;
         };
         ds = devshell.legacyPackages.${system};
+        lib = pkgs.lib;
         python = pkgs.python311;
 
-        # Runtime libs the pip wheels (torch, opencv, onnxruntime, pycolmap, …)
-        # link against. /run/opengl-driver/lib is where the NVIDIA driver lives
-        # on NixOS; torch needs libcuda.so.1 from there at runtime.
-        libPath =
-          pkgs.lib.makeLibraryPath (with pkgs; [
-            stdenv.cc.cc.lib
-            zlib
-            libGL
-            glib
-            ffmpeg
-            libxcrypt-legacy
-          ]) + ":/run/opengl-driver/lib";
-      in
-      {
-        devShells.default = ds.mkShell {
-          name = "imcui";
+        workspace = uv2nix.lib.workspace.loadWorkspace {
+          workspaceRoot = ./.;
+        };
 
+        overlay = workspace.mkPyprojectOverlay {
+          sourcePreference = "wheel";
+        };
+
+        hammerOverrides = uv2nix_hammer_overrides.overrides_strict pkgs;
+
+        # Thin overlay on top of hammer. Hammer handles torch's postFixup
+        # (symlinks nvidia .so into $out/lib) and the common nvidia-*
+        # fixups; we add what's missing for torch 2.8 cu128.
+        # Pattern lifted from ~/src/phind/models/cuda-test/package.nix.
+        projectOverrides = final: prev: lib.optionalAttrs pkgs.stdenv.isLinux {
+          torch = prev.torch.overrideAttrs (old: {
+            buildInputs = (old.buildInputs or [ ]) ++ [
+              pkgs.cudaPackages.libcusparse_lt
+              pkgs.cudaPackages.libcufile
+            ];
+            autoPatchelfIgnoreMissingDeps =
+              (old.autoPatchelfIgnoreMissingDeps or [ ]) ++ [ "libcuda.so.1" ];
+          });
+          nvidia-cufile-cu12 = prev.nvidia-cufile-cu12.overrideAttrs (old: {
+            buildInputs = (old.buildInputs or [ ]) ++ [ pkgs.rdma-core ];
+          });
+        };
+
+        pythonSet =
+          (pkgs.callPackage pyproject-nix.build.packages {
+            inherit python;
+          }).overrideScope (lib.composeManyExtensions [
+            pyproject-build-systems.overlays.default
+            overlay
+            (lib.composeExtensions hammerOverrides projectOverrides)
+          ]);
+
+        env = pythonSet.mkVirtualEnv "imcui-env" workspace.deps.default;
+
+        # Runtime lib path so pip-wheels' dlopen calls resolve.
+        # /run/opengl-driver/lib supplies libcuda.so.1 on NixOS.
+        runtimeLibs = [
+          pkgs.stdenv.cc.cc.lib
+          pkgs.zlib
+          pkgs.libGL
+          pkgs.glib
+          pkgs.ffmpeg
+          pkgs.libxcrypt-legacy
+        ];
+        runtimeLibPath =
+          lib.makeLibraryPath runtimeLibs + ":/run/opengl-driver/lib";
+
+        # Wrap the virtualenv so $out/bin exposes only the imcui binary,
+        # with LD_LIBRARY_PATH set for CUDA runtime.
+        imcui-app = pkgs.runCommand "imcui"
+          {
+            nativeBuildInputs = [ pkgs.makeWrapper ];
+            meta = {
+              description = "Image Matching WebUI CLI";
+              mainProgram = "imcui";
+            };
+          } ''
+          mkdir -p $out/bin
+          makeWrapper ${env}/bin/imcui $out/bin/imcui \
+            --prefix LD_LIBRARY_PATH : "${runtimeLibPath}"
+        '';
+
+        # Impure devshell (phase a) — has uv for iteration on pyproject.toml.
+        impureShell = ds.mkShell {
+          name = "imcui-impure";
           packages = with pkgs; [
             python
             uv
@@ -46,45 +130,71 @@
             colmap
             ffmpeg
           ];
-
           env = [
-            { name = "LD_LIBRARY_PATH"; value = libPath; }
+            { name = "LD_LIBRARY_PATH"; value = runtimeLibPath; }
             { name = "UV_PYTHON"; value = "${python}/bin/python"; }
             { name = "UV_PYTHON_DOWNLOADS"; value = "never"; }
             { name = "UV_NO_SYNC"; value = "1"; }
           ];
-
           commands = [
             {
               name = "venv-init";
-              help = "Create .venv and install the project + requirements.txt";
+              help = "Create .venv and install the project + deps from uv.lock";
               command = ''
                 set -e
                 uv venv --python "$UV_PYTHON" --prompt imcui .venv
                 uv pip install --python .venv/bin/python -e .
-                echo
-                echo "Activate with: source .venv/bin/activate"
               '';
             }
             {
               name = "run-app";
-              help = "Run the Gradio image matching webui (app.py)";
+              help = "Run app.py from the impure .venv";
               command = ''
                 set -e
                 test -d .venv || { echo "Run venv-init first"; exit 1; }
                 exec .venv/bin/python app.py "$@"
               '';
             }
+          ];
+        };
+
+        # Pure devshell backed by the uv2nix-built env.
+        pureShell = ds.mkShell {
+          name = "imcui";
+          packages = [ env pkgs.git-lfs pkgs.ffmpeg pkgs.colmap ];
+          env = [
+            { name = "LD_LIBRARY_PATH"; value = runtimeLibPath; }
+            { name = "PYTHONDONTWRITEBYTECODE"; value = "1"; }
+          ];
+          commands = [
             {
-              name = "run-tests";
-              help = "Run pytest in the venv";
-              command = ''
-                set -e
-                test -d .venv || { echo "Run venv-init first"; exit 1; }
-                exec .venv/bin/python -m pytest "$@"
-              '';
+              name = "run-app";
+              help = "Run app.py using the pure Nix-built env";
+              command = ''exec ${env}/bin/python app.py "$@"'';
+            }
+            {
+              name = "run-imcui";
+              help = "Run the imcui CLI";
+              command = ''exec ${imcui-app}/bin/imcui "$@"'';
             }
           ];
+        };
+      in
+      {
+        packages = {
+          default = imcui-app;
+          imcui = imcui-app;
+          env = env;
+        };
+
+        apps.default = {
+          type = "app";
+          program = "${imcui-app}/bin/imcui";
+        };
+
+        devShells = {
+          default = pureShell;
+          impure = impureShell;
         };
       });
 }
