@@ -103,19 +103,36 @@
         runtimeLibPath =
           lib.makeLibraryPath runtimeLibs + ":/run/opengl-driver/lib";
 
-        # Wrap the virtualenv so $out/bin exposes only the imcui binary,
-        # with LD_LIBRARY_PATH set for CUDA runtime.
+        # Wrap the virtualenv so $out/bin exposes only the imcui binary.
+        # The wrapper:
+        #   - sets LD_LIBRARY_PATH for CUDA + C libs that the wheels dlopen
+        #   - defaults --example-data-root to a writable user cache dir
+        #     (the bundled datasets/ ships in the read-only nix store and
+        #     the app writes into it on first run)
         imcui-app = pkgs.runCommand "imcui"
           {
-            nativeBuildInputs = [ pkgs.makeWrapper ];
             meta = {
               description = "Image Matching WebUI CLI";
               mainProgram = "imcui";
             };
           } ''
           mkdir -p $out/bin
-          makeWrapper ${env}/bin/imcui $out/bin/imcui \
-            --prefix LD_LIBRARY_PATH : "${runtimeLibPath}"
+          cat > $out/bin/imcui <<'EOF'
+          #!${pkgs.runtimeShell}
+          export LD_LIBRARY_PATH="@RUNTIME_LIB_PATH@''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          : "''${XDG_CACHE_HOME:=$HOME/.cache}"
+          cache_dir="$XDG_CACHE_HOME/imcui/datasets"
+          mkdir -p "$cache_dir"
+          if [[ "$*" == *--example-data-root* || "$*" == *" -d "* ]]; then
+            exec @IMCUI@ "$@"
+          else
+            exec @IMCUI@ --example-data-root "$cache_dir" "$@"
+          fi
+          EOF
+          substituteInPlace $out/bin/imcui \
+            --replace-fail '@RUNTIME_LIB_PATH@' '${runtimeLibPath}' \
+            --replace-fail '@IMCUI@' '${env}/bin/imcui'
+          chmod +x $out/bin/imcui
         '';
 
         # Impure devshell (phase a) — has uv for iteration on pyproject.toml.
