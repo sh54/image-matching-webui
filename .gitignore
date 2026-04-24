@@ -34,3 +34,9 @@ oryx-build-commands.txt
 dist
 tmp
 **.DS_Store**
+
+# Nix / direnv
+.direnv/
+.venv/
+result
+result-*
